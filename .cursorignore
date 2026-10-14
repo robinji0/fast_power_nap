@@ -1,0 +1,7 @@
+build/
+.dart_tool/
+android/.gradle/
+**/ephemeral/
+.pub-cache/
+.pub/
+/coverage/
