@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "power_nap_ai" "\0"
+            VALUE "FileDescription", "Fast Power Nap" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "power_nap_ai" "\0"
+            VALUE "InternalName", "fast_power_nap" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "power_nap_ai.exe" "\0"
-            VALUE "ProductName", "power_nap_ai" "\0"
+            VALUE "OriginalFilename", "fast_power_nap.exe" "\0"
+            VALUE "ProductName", "Fast Power Nap" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

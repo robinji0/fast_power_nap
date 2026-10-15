@@ -1,11 +1,11 @@
 {
-    "name": "power_nap_ai",
-    "short_name": "power_nap_ai",
+    "name": "Fast Power Nap",
+    "short_name": "Fast Power Nap",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Fast Power Nap - a 20-minute power nap app.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -2,7 +2,7 @@ import 'dart:ui' show FontFeature;
 
 import 'package:flutter/material.dart';
 
-import 'main.dart' show PowerNapApp;
+import 'main.dart' show FastPowerNapApp;
 import 'nap_controller.dart';
 
 /// 信号指示灯的状态
@@ -24,7 +24,7 @@ class _NapHomePageState extends State<NapHomePage>
   late final AnimationController _pulse;
   late final Animation<double> _pulseScale;
 
-  static const Color _accent = PowerNapApp.accent;
+  static const Color _accent = FastPowerNapApp.accent;
 
   @override
   void initState() {
@@ -109,7 +109,7 @@ class _NapHomePageState extends State<NapHomePage>
                 children: <Widget>[
                   const SizedBox(height: 36),
                   const Text(
-                    'POWER NAP AI',
+                    'FAST POWER NAP',
                     style: TextStyle(
                       fontSize: 13,
                       letterSpacing: 5,

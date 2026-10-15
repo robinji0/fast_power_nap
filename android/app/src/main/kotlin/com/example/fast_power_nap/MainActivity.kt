@@ -1,4 +1,4 @@
-package com.example.power_nap_ai
+package com.example.fast_power_nap
 
 import io.flutter.embedding.android.FlutterActivity
 

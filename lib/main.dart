@@ -21,12 +21,12 @@ Future<void> main() async {
     systemNavigationBarIconBrightness: Brightness.light,
   ));
 
-  runApp(const PowerNapApp());
+  runApp(const FastPowerNapApp());
 }
 
 /// 根组件：配置全局暗黑主题
-class PowerNapApp extends StatelessWidget {
-  const PowerNapApp({super.key});
+class FastPowerNapApp extends StatelessWidget {
+  const FastPowerNapApp({super.key});
 
   // 主色调：柔和的靛蓝色，夜间不刺眼
   static const Color accent = Color(0xFF7C9CFF);
@@ -35,7 +35,7 @@ class PowerNapApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Power Nap AI',
+      title: 'Fast Power Nap',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.dark,
       darkTheme: ThemeData(
