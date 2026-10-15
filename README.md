@@ -56,6 +56,24 @@ flutter pub get
 flutter run
 ```
 
+### Build with GitHub Actions
+
+The workflow [`.github/workflows/build.yml`](.github/workflows/build.yml) builds a release **APK** and an unsigned **IPA** on GitHub.
+
+**Trigger it:**
+
+1. **Actions** → **Build APK & IPA** → **Run workflow**, or
+2. Push a version tag: `git tag v1.1.0 && git push origin v1.1.0`
+
+Artifacts appear under the workflow run (**android-apk-…** / **ios-ipa-…**). Tags starting with `v` also attach the files to a GitHub Release.
+
+| Artifact | Notes |
+|----------|--------|
+| APK | Release build (currently signed with the debug keystore — fine for sideload/testing) |
+| IPA | Unsigned; re-sign with your Apple Developer cert before installing on a device or uploading to App Store / TestFlight |
+
+Flutter version used in CI is pinned to **3.47.7** (stable), matching this project.
+
 ### Permissions
 
 - **Microphone** (optional) — only used during the detecting phase for breathing and ambient sound. Disable anytime in Settings.

@@ -1,0 +1,158 @@
+name: Build APK & IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.7'
+
+jobs:
+  # ───────────────────────── Android APK ─────────────────────────
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Rename APK with version
+        id: meta
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | tr '+' '-')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "dist/fast-power-nap-${VERSION}.apk"
+          ls -lh dist/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ steps.meta.outputs.version }}
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # ───────────────────────── iOS IPA ─────────────────────────
+  # Unsigned IPA: installable only after re-signing with your Apple
+  # Developer certificate (Xcode / fastlane). No secrets required.
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Build iOS (no code sign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        id: meta
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}' | tr '+' '-')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          APP_PATH=""
+          for candidate in \
+            build/ios/iphoneos/Runner.app \
+            build/ios/Release-iphoneos/Runner.app
+          do
+            if [ -d "$candidate" ]; then
+              APP_PATH="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$APP_PATH" ]; then
+            echo "Runner.app not found under build/ios/"
+            find build/ios -name 'Runner.app' -type d || true
+            exit 1
+          fi
+
+          mkdir -p dist/Payload
+          cp -R "$APP_PATH" dist/Payload/
+          (
+            cd dist
+            zip -qr "fast-power-nap-${VERSION}.ipa" Payload
+          )
+          rm -rf dist/Payload
+          ls -lh dist/
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-${{ steps.meta.outputs.version }}
+          path: dist/*.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+  # ───────────────────────── Attach to GitHub Release ─────────────────────────
+  release:
+    name: Attach to Release
+    needs: [build-android, build-ios]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Android APK
+        uses: actions/download-artifact@v4
+        with:
+          pattern: android-apk-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Download iOS IPA
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ios-ipa-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
