@@ -1,7 +1,7 @@
 name: fast_power_nap
-description: "Fast Power Nap - a minimal dark-mode 20-minute power nap app that starts the countdown only after you fall asleep."
+description: "Fast Power Nap - a minimal dark-mode power nap app that starts the countdown only after you fall asleep."
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -18,8 +18,10 @@ dependencies:
   wakelock_plus: ^1.2.8
   # 麦克风 PCM 流：用于呼吸声与环境声分析（仅内存实时分析，不落盘）
   record: ^6.1.1
-  # 持久化用户设置（严格度、白噪音、麦克风开关）
+  # 持久化用户设置（入睡敏感度、午休时长等）
   shared_preferences: ^2.3.2
+  # 入睡后把应用亮度调到最低（仅应用级亮度，无需额外权限）
+  screen_brightness: ^2.1.11
 
   cupertino_icons: ^1.0.8
 

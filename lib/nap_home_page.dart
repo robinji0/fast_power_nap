@@ -1,12 +1,28 @@
+import 'dart:async';
 import 'dart:ui' show FontFeature;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 
 import 'main.dart' show FastPowerNapApp;
 import 'nap_controller.dart';
 
 /// 信号指示灯的状态
 enum _SignalState { on, pending, off }
+
+/// 屏幕亮度模式
+enum _DimLevel {
+  /// 正常：恢复系统亮度与系统栏
+  off,
+
+  /// 黑屏：亮度调到最低 + 纯黑覆盖层 + 沉浸模式
+  dark,
+
+  /// 临时查看：轻触黑屏后短暂显示界面（仍保持极低亮度）
+  peek,
+}
 
 /// 主界面：一个巨大的圆形按钮 + 状态文案 + 倒计时 + 检测信号指示
 class NapHomePage extends StatefulWidget {
@@ -24,7 +40,15 @@ class _NapHomePageState extends State<NapHomePage>
   late final AnimationController _pulse;
   late final Animation<double> _pulseScale;
 
+  /// 黑屏模式状态
+  _DimLevel _dimLevel = _DimLevel.off;
+  bool _peeking = false;
+  Timer? _peekTimer;
+
   static const Color _accent = FastPowerNapApp.accent;
+
+  /// 轻触黑屏后临时显示界面的时长
+  static const Duration _peekDuration = Duration(seconds: 5);
 
   @override
   void initState() {
@@ -37,8 +61,13 @@ class _NapHomePageState extends State<NapHomePage>
     _pulseScale = Tween<double>(begin: 0.96, end: 1.04).animate(
       CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
     );
-    _controller.addListener(_syncPulse);
+    _controller.addListener(_onControllerChanged);
     _controller.loadSettings(); // 读取上次保存的设置
+  }
+
+  void _onControllerChanged() {
+    _syncPulse();
+    _syncDim();
   }
 
   /// 仅在检测阶段运行脉冲动画，其余阶段停止以省电
@@ -51,11 +80,69 @@ class _NapHomePageState extends State<NapHomePage>
     }
   }
 
+  // ───────────────────────── 黑屏模式 ─────────────────────────
+
+  /// 是否应处于黑屏（午休中 + 设置开启）
+  bool get _wantDim =>
+      _controller.phase == NapPhase.napping && _controller.dimScreenEnabled;
+
+  /// 根据控制器状态同步亮度模式
+  void _syncDim() {
+    final bool wantDim = _wantDim;
+    if (!wantDim) {
+      _peeking = false;
+      _peekTimer?.cancel();
+    }
+    final _DimLevel target =
+        !wantDim ? _DimLevel.off : (_peeking ? _DimLevel.peek : _DimLevel.dark);
+    if (target == _dimLevel) return;
+    _dimLevel = target;
+    _applyDimLevel(target);
+  }
+
+  Future<void> _applyDimLevel(_DimLevel level) async {
+    try {
+      switch (level) {
+        case _DimLevel.dark:
+          await SystemChrome.setEnabledSystemUIMode(
+            SystemUiMode.immersiveSticky,
+          );
+          await ScreenBrightness.instance.setApplicationScreenBrightness(0.0);
+          break;
+        case _DimLevel.peek:
+          await ScreenBrightness.instance.setApplicationScreenBrightness(0.1);
+          break;
+        case _DimLevel.off:
+          await ScreenBrightness.instance.resetApplicationScreenBrightness();
+          await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+          break;
+      }
+    } catch (e) {
+      // 亮度调节失败不应影响午休流程
+      debugPrint('Apply dim level failed: $e');
+    }
+  }
+
+  /// 轻触黑屏：临时显示界面 5 秒，然后自动恢复黑屏
+  void _onOverlayTap() {
+    setState(() => _peeking = true);
+    _syncDim();
+    _peekTimer?.cancel();
+    _peekTimer = Timer(_peekDuration, () {
+      if (!mounted) return;
+      setState(() => _peeking = false);
+      _syncDim();
+    });
+  }
+
   @override
   void dispose() {
-    _controller.removeListener(_syncPulse);
+    _peekTimer?.cancel();
+    _controller.removeListener(_onControllerChanged);
     _pulse.dispose();
     _controller.dispose(); // 内部销毁 Timer / 传感器与麦克风订阅 / 播放器
+    // 退出页面时确保亮度与系统栏恢复正常
+    _applyDimLevel(_DimLevel.off);
     super.dispose();
   }
 
@@ -68,7 +155,7 @@ class _NapHomePageState extends State<NapHomePage>
       case NapPhase.detecting:
         return _controller.isResuming ? '检测到你醒来了，计时已暂停' : '正在等待入睡检测';
       case NapPhase.napping:
-        return '正在进行 20 分钟深度恢复';
+        return '正在进行 ${_controller.napMinutes} 分钟深度恢复';
       case NapPhase.finished:
         return _controller.endReason == NapEndReason.completed
             ? '午休结束，精力已充电'
@@ -85,7 +172,7 @@ class _NapHomePageState extends State<NapHomePage>
             ? 'Awake detected. Timer paused.'
             : 'Waiting for sleep detection';
       case NapPhase.napping:
-        return '20-minute deep recovery in progress';
+        return '${_controller.napMinutes}-minute deep recovery in progress';
       case NapPhase.finished:
         return _controller.endReason == NapEndReason.completed
             ? 'Nap complete. Recharged.'
@@ -98,37 +185,53 @@ class _NapHomePageState extends State<NapHomePage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: ListenableBuilder(
-          listenable: _controller,
-          builder: (BuildContext context, Widget? _) {
-            final NapPhase phase = _controller.phase;
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 28),
-              child: Column(
-                children: <Widget>[
-                  const SizedBox(height: 36),
-                  const Text(
-                    'FAST POWER NAP',
-                    style: TextStyle(
-                      fontSize: 13,
-                      letterSpacing: 5,
-                      color: Colors.white38,
-                      fontWeight: FontWeight.w600,
-                    ),
+      body: ListenableBuilder(
+        listenable: _controller,
+        builder: (BuildContext context, Widget? _) {
+          final NapPhase phase = _controller.phase;
+          final bool showDarkOverlay = _wantDim && !_peeking;
+
+          return Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  child: Column(
+                    children: <Widget>[
+                      const SizedBox(height: 36),
+                      const Text(
+                        'FAST POWER NAP',
+                        style: TextStyle(
+                          fontSize: 13,
+                          letterSpacing: 5,
+                          color: Colors.white38,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(flex: 2),
+                      _buildStatusText(phase),
+                      const Spacer(flex: 2),
+                      _buildMainCircle(phase),
+                      const Spacer(flex: 2),
+                      _buildBottomArea(phase),
+                      const SizedBox(height: 32),
+                    ],
                   ),
-                  const Spacer(flex: 2),
-                  _buildStatusText(phase),
-                  const Spacer(flex: 2),
-                  _buildMainCircle(phase),
-                  const Spacer(flex: 2),
-                  _buildBottomArea(phase),
-                  const SizedBox(height: 32),
-                ],
+                ),
               ),
-            );
-          },
-        ),
+              // 入睡后的纯黑覆盖层（OLED 屏幕黑色像素不发光）
+              if (showDarkOverlay)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _onOverlayTap,
+                    child: const ColoredBox(color: Colors.black),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -397,7 +500,8 @@ class _NapHomePageState extends State<NapHomePage>
       case NapPhase.idle:
         return <Widget>[
           Text(
-            '静止 ${NapController.formatSeconds(_controller.requiredStillSeconds)} 后自动开始倒计时',
+            '入睡判定约 ${_controller.requiredStillSeconds ~/ 60} 分钟'
+            ' · 午休 ${_controller.napMinutes} 分钟',
             style: infoStyle,
           ),
         ];
@@ -409,7 +513,10 @@ class _NapHomePageState extends State<NapHomePage>
         ];
       case NapPhase.napping:
         return <Widget>[
-          const Text('正在监测是否醒来', style: infoStyle),
+          Text(
+            _controller.dimScreenEnabled ? '轻触黑屏可查看倒计时' : '正在监测是否醒来',
+            style: infoStyle,
+          ),
         ];
       case NapPhase.finished:
         return <Widget>[
@@ -432,7 +539,7 @@ class _NapHomePageState extends State<NapHomePage>
         return '正在启动麦克风…';
       case MicStatus.active:
       case MicStatus.off:
-        return '需静止 ${NapController.formatSeconds(_controller.effectiveRequiredSeconds)}'
+        return '需累计静止 ${NapController.formatSeconds(_controller.effectiveRequiredSeconds)}'
             '${_controller.breathing ? '（已检测到呼吸，缩短判定时间）' : ''}';
     }
   }
@@ -517,89 +624,100 @@ class _NapHomePageState extends State<NapHomePage>
   // ───────────────────────── 设置面板 ─────────────────────────
 
   void _openSettings() {
+    // "自定义"模式的界面状态：当前时长不在快捷选项里时，默认处于自定义
+    bool customNap = !NapController.napPresets.contains(_controller.napMinutes);
+
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xFF0B0F1E),
       showDragHandle: true,
       isScrollControlled: true,
       builder: (BuildContext sheetContext) {
-        return ListenableBuilder(
-          listenable: _controller,
-          builder: (BuildContext context, Widget? _) {
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    const Text(
-                      '入睡判定严格度',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: SegmentedButton<Strictness>(
-                        showSelectedIcon: false,
-                        segments: const <ButtonSegment<Strictness>>[
-                          ButtonSegment<Strictness>(
-                            value: Strictness.relaxed,
-                            label: Text('宽松'),
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setSheetState) {
+            return ListenableBuilder(
+              listenable: _controller,
+              builder: (BuildContext context, Widget? _) {
+                return SafeArea(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        _sectionTitle('入睡敏感度'),
+                        const SizedBox(height: 12),
+                        _buildOnsetSelector(),
+                        const SizedBox(height: 8),
+                        Text(
+                          _onsetHint(_controller.onset),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.white54,
                           ),
-                          ButtonSegment<Strictness>(
-                            value: Strictness.standard,
-                            label: Text('标准'),
+                        ),
+                        const SizedBox(height: 24),
+                        _sectionTitle('午休时长'),
+                        const SizedBox(height: 12),
+                        _buildNapDurationSelector(
+                          customNap,
+                          (bool v) => setSheetState(() => customNap = v),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          '从判定入睡后开始计时，不含入睡前的检测时间。',
+                          style: TextStyle(fontSize: 13, color: Colors.white54),
+                        ),
+                        const SizedBox(height: 16),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: _controller.dimScreenEnabled,
+                          onChanged: (bool v) =>
+                              _controller.updateSettings(dimScreen: v),
+                          title: const Text('入睡后黑屏'),
+                          subtitle: const Text(
+                            '屏幕调到最暗并显示纯黑画面（OLED 屏几乎不发光）。'
+                            '应用仍在运行，继续监测醒来并准时响铃。轻触屏幕可临时查看倒计时。',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white54,
+                            ),
                           ),
-                          ButtonSegment<Strictness>(
-                            value: Strictness.strict,
-                            label: Text('严格'),
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: _controller.micEnabled,
+                          onChanged: (bool v) =>
+                              _controller.updateSettings(useMic: v),
+                          title: const Text('麦克风辅助判断'),
+                          subtitle: const Text(
+                            '检测呼吸声与环境声，更准确。仅在检测阶段录音，'
+                            '音频在手机内存中实时分析，不保存、不上传。',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white54,
+                            ),
                           ),
-                        ],
-                        selected: <Strictness>{_controller.strictness},
-                        onSelectionChanged: (Set<Strictness> s) {
-                          _controller.updateSettings(strictness: s.first);
-                        },
-                      ),
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: _controller.whiteNoiseEnabled,
+                          onChanged: (bool v) =>
+                              _controller.updateSettings(whiteNoise: v),
+                          title: const Text('入睡后播放白噪音'),
+                          subtitle: const Text(
+                            '入睡判定成功后才开始播放，避免掩盖呼吸声。',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white54,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _strictnessHint(_controller.strictness),
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.white54,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _controller.micEnabled,
-                      onChanged: (bool v) =>
-                          _controller.updateSettings(useMic: v),
-                      title: const Text('麦克风辅助判断'),
-                      subtitle: const Text(
-                        '检测呼吸声与环境声，更准确。仅在检测阶段录音，'
-                        '音频在手机内存中实时分析，不保存、不上传。',
-                        style: TextStyle(fontSize: 12, color: Colors.white54),
-                      ),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      value: _controller.whiteNoiseEnabled,
-                      onChanged: (bool v) =>
-                          _controller.updateSettings(whiteNoise: v),
-                      title: const Text('入睡后播放白噪音'),
-                      subtitle: const Text(
-                        '入睡判定成功后才开始播放，避免掩盖呼吸声。',
-                        style: TextStyle(fontSize: 12, color: Colors.white54),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             );
           },
         );
@@ -607,14 +725,130 @@ class _NapHomePageState extends State<NapHomePage>
     );
   }
 
-  String _strictnessHint(Strictness s) {
-    switch (s) {
-      case Strictness.relaxed:
-        return '静止 2 分钟即可，容忍轻微动静。适合容易翻身的人。';
-      case Strictness.standard:
-        return '静止 3 分钟，推荐设置。';
-      case Strictness.strict:
-        return '静止 4 分钟，几乎不动才算入睡。减少"躺着没睡"被误判。';
+  Widget _sectionTitle(String text) {
+    return Text(
+      text,
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    );
+  }
+
+  /// 入睡敏感度：快 / 标准 / 慢
+  Widget _buildOnsetSelector() {
+    Widget label(String name, String minutes) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(name),
+          Text(
+            minutes,
+            style: const TextStyle(fontSize: 11, color: Colors.white54),
+          ),
+        ],
+      );
     }
+
+    return SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<SleepOnset>(
+        showSelectedIcon: false,
+        segments: <ButtonSegment<SleepOnset>>[
+          ButtonSegment<SleepOnset>(
+            value: SleepOnset.fast,
+            label: label('快', '3 分钟'),
+          ),
+          ButtonSegment<SleepOnset>(
+            value: SleepOnset.standard,
+            label: label('标准', '7 分钟'),
+          ),
+          ButtonSegment<SleepOnset>(
+            value: SleepOnset.slow,
+            label: label('慢', '12 分钟'),
+          ),
+        ],
+        selected: <SleepOnset>{_controller.onset},
+        onSelectionChanged: (Set<SleepOnset> s) {
+          _controller.updateSettings(onset: s.first);
+        },
+      ),
+    );
+  }
+
+  String _onsetHint(SleepOnset s) {
+    switch (s) {
+      case SleepOnset.fast:
+        return '约 3 分钟判定入睡，适合躺下就睡着的人。';
+      case SleepOnset.standard:
+        return '约 7 分钟判定入睡，适合大多数人。';
+      case SleepOnset.slow:
+        return '约 12 分钟判定入睡，适合需要慢慢放松的人。';
+    }
+  }
+
+  /// 午休时长：快捷选项 + 自定义滑块
+  Widget _buildNapDurationSelector(
+    bool customNap,
+    ValueChanged<bool> setCustomNap,
+  ) {
+    final int minutes = _controller.napMinutes;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            for (final int m in NapController.napPresets)
+              ChoiceChip(
+                label: Text(
+                  m == NapController.recommendedNapMinutes
+                      ? '$m 分钟 · Recommended'
+                      : '$m 分钟',
+                ),
+                selected: !customNap && minutes == m,
+                selectedColor: _accent.withAlpha(70),
+                onSelected: (bool _) {
+                  setCustomNap(false);
+                  _controller.updateSettings(napMinutes: m);
+                },
+              ),
+            ChoiceChip(
+              label: const Text('自定义'),
+              selected: customNap,
+              selectedColor: _accent.withAlpha(70),
+              onSelected: (bool _) => setCustomNap(true),
+            ),
+          ],
+        ),
+        if (customNap) ...<Widget>[
+          const SizedBox(height: 8),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Slider(
+                  value: minutes.toDouble(),
+                  min: NapController.minNapMinutes.toDouble(),
+                  max: NapController.maxNapMinutes.toDouble(),
+                  divisions:
+                      NapController.maxNapMinutes - NapController.minNapMinutes,
+                  label: '$minutes 分钟',
+                  onChanged: (double v) {
+                    _controller.updateSettings(napMinutes: v.round());
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 64,
+                child: Text(
+                  '$minutes 分钟',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 14, color: Colors.white70),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 }

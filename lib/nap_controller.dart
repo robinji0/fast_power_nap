@@ -29,23 +29,23 @@ enum NapPhase {
 
 /// 结束原因
 enum NapEndReason {
-  /// 20 分钟倒计时正常走完
+  /// 倒计时正常走完
   completed,
 
   /// 中途醒来后长时间没有重新入睡，提前结束
   wokeUp,
 }
 
-/// 入睡判定严格度
-enum Strictness {
-  /// 宽松：静止 2 分钟，容忍轻微动静
-  relaxed,
+/// 入睡敏感度：用户平时大约需要多久才能睡着
+enum SleepOnset {
+  /// 快：约 3 分钟（秒睡体质）
+  fast,
 
-  /// 标准：静止 3 分钟（推荐）
+  /// 标准：约 7 分钟
   standard,
 
-  /// 严格：静止 4 分钟，几乎不动才算入睡
-  strict,
+  /// 慢：约 12 分钟（需要慢慢放松）
+  slow,
 }
 
 /// 麦克风状态
@@ -54,23 +54,38 @@ enum MicStatus { off, starting, active, denied, error }
 /// 内核控制器：传感器融合入睡判定、醒来监测、倒计时、音频、屏幕常亮。
 ///
 /// 入睡判定（融合三路信号）：
-///  1. 体动：加速度计，连续静止达到"所需静止时长"（硬性条件）
+///  1. 体动：加速度计，累计静止达到"所需静止时长"（硬性条件）
 ///  2. 环境声：最近 20 秒没有突发声音（说话/咳嗽等），否则暂缓判定
 ///  3. 呼吸声：检测到规律呼吸节律时，所需静止时长缩短为 67%
 /// 若麦克风不可用，则自动退化为只用体动判断。
 ///
-/// 午休中持续用加速度计监测"醒来"：连续多秒出现强烈动作（起身、拿起手机），
+/// 体动容错：入睡需要的时间可能长达 12 分钟，期间翻个身很正常，所以
+///  - 轻微动作（翻身）：每次只扣掉一半已累计的静止时间
+///  - 大幅动作（起身、拿起手机）：静止时间清零
+///
+/// 午休中持续用加速度计监测"醒来"：连续多秒出现强烈动作，
 /// 则暂停倒计时并重新检测入睡；单次翻身不会被误判为醒来。
 class NapController extends ChangeNotifier {
   // ───────────────────────── 固定参数 ─────────────────────────
 
-  /// 午休时长（20 分钟）
-  static const int napSeconds = 1200;
+  /// 推荐的午休时长（分钟）
+  static const int recommendedNapMinutes = 20;
+
+  /// 自定义午休时长的范围（分钟）
+  static const int minNapMinutes = 5;
+  static const int maxNapMinutes = 90;
+
+  /// 快捷选项（分钟）
+  static const List<int> napPresets = <int>[10, 15, 20, 30, 45];
 
   /// 标准重力加速度 (m/s²)
   static const double _gravity = 9.80665;
 
-  /// 醒来判定：强烈动作的偏差阈值（高于入睡检测的体动阈值，翻身不会触发）
+  /// 轻微体动阈值：合加速度偏离重力 / 相邻采样变化
+  static const double motionDeviationThreshold = 0.5;
+  static const double motionDeltaThreshold = 0.3;
+
+  /// 强烈动作阈值（高于轻微体动，用于"清零"与"醒来"判定）
   static const double wakeDeviation = 1.2;
   static const double wakeDelta = 0.8;
 
@@ -78,8 +93,8 @@ class NapController extends ChangeNotifier {
   static const int wakeWindowSeconds = 10;
   static const int wakeBucketsNeeded = 5;
 
-  /// 醒来后超过 10 分钟仍未重新入睡，则提前结束本次午休
-  static const int resumeTimeoutSeconds = 600;
+  /// 醒来后，在"所需入睡时长"之外再多给 10 分钟重新入睡，超时则提前结束
+  static const int resumeExtraSeconds = 600;
 
   /// 检测到规律呼吸时，所需静止时长的缩放系数
   static const double breathingFactor = 0.67;
@@ -93,47 +108,30 @@ class NapController extends ChangeNotifier {
 
   // ───────────────────────── 用户设置 ─────────────────────────
 
-  Strictness _strictness = Strictness.standard;
+  SleepOnset _onset = SleepOnset.standard;
+  int _napMinutes = recommendedNapMinutes;
   bool _whiteNoise = true; // 入睡后播放白噪音
   bool _useMic = true; // 检测阶段使用麦克风辅助
+  bool _dimScreen = true; // 入睡后黑屏并调至最低亮度
 
-  Strictness get strictness => _strictness;
+  SleepOnset get onset => _onset;
+  int get napMinutes => _napMinutes;
   bool get whiteNoiseEnabled => _whiteNoise;
   bool get micEnabled => _useMic;
+  bool get dimScreenEnabled => _dimScreen;
 
-  /// 当前严格度下，基础的"所需静止秒数"
+  /// 午休时长（秒）
+  int get napSeconds => _napMinutes * 60;
+
+  /// 当前敏感度下，基础的"所需静止秒数"
   int get requiredStillSeconds {
-    switch (_strictness) {
-      case Strictness.relaxed:
-        return 120;
-      case Strictness.standard:
+    switch (_onset) {
+      case SleepOnset.fast:
         return 180;
-      case Strictness.strict:
-        return 240;
-    }
-  }
-
-  /// 体动判定：合加速度偏离重力的阈值（越小越敏感）
-  double get _motionDeviationThreshold {
-    switch (_strictness) {
-      case Strictness.relaxed:
-        return 0.8;
-      case Strictness.standard:
-        return 0.5;
-      case Strictness.strict:
-        return 0.3;
-    }
-  }
-
-  /// 体动判定：相邻采样变化阈值
-  double get _motionDeltaThreshold {
-    switch (_strictness) {
-      case Strictness.relaxed:
-        return 0.5;
-      case Strictness.standard:
-        return 0.3;
-      case Strictness.strict:
-        return 0.2;
+      case SleepOnset.standard:
+        return 420;
+      case SleepOnset.slow:
+        return 720;
     }
   }
 
@@ -144,7 +142,7 @@ class NapController extends ChangeNotifier {
   bool _resuming = false; // 是否处于"醒来后重新入睡"的检测中
   int _wakeCount = 0;
   int _motionStillSeconds = 0;
-  int _remainingSeconds = napSeconds;
+  int _remainingSeconds = recommendedNapMinutes * 60;
   double _detectProgress = 0.0;
   bool _audioQuiet = true;
   bool _breathing = false;
@@ -152,15 +150,17 @@ class NapController extends ChangeNotifier {
   String? _errorMessage;
   bool _disposed = false;
 
-  DateTime _lastMotionAt = DateTime.now();
+  // 体动累计相关
+  bool _inMotionEpisode = false; // 是否处于一次"体动事件"中
+  int _quietRun = 0; // 连续安静的秒数（用于判断体动事件结束）
+  bool _moderateInSecond = false; // 当前这一秒内是否出现轻微体动
+  bool _strongInSecond = false; // 当前这一秒内是否出现强烈动作
+
   DateTime? _resumeStartedAt;
   DateTime? _napEndAt;
   double? _lastMagnitude;
 
-  /// 当前这一秒内是否出现过强烈动作
-  bool _strongMotionThisSecond = false;
-
-  /// 最近 N 秒的"强烈动作"滑动窗口
+  /// 最近 N 秒的"强烈动作"滑动窗口（午休中醒来监测）
   final Queue<bool> _wakeWindow = Queue<bool>();
 
   StreamSubscription<AccelerometerEvent>? _accelSub;
@@ -217,33 +217,53 @@ class NapController extends ChangeNotifier {
   Future<void> loadSettings() async {
     try {
       final SharedPreferences p = await SharedPreferences.getInstance();
-      final int idx = (p.getInt('strictness') ?? 1).clamp(0, 2);
-      _strictness = Strictness.values[idx];
+      final int idx = (p.getInt('sleepOnset') ?? 1).clamp(0, 2);
+      _onset = SleepOnset.values[idx];
+      _napMinutes = (p.getInt('napMinutes') ?? recommendedNapMinutes)
+          .clamp(minNapMinutes, maxNapMinutes);
       _whiteNoise = p.getBool('whiteNoise') ?? true;
       _useMic = p.getBool('useMic') ?? true;
+      _dimScreen = p.getBool('dimScreen') ?? true;
+      if (_phase == NapPhase.idle) {
+        _remainingSeconds = napSeconds;
+      }
       _safeNotify();
     } catch (e) {
       debugPrint('Load settings failed: $e');
     }
   }
 
-  /// 仅在空闲/结束状态下允许修改设置
+  /// 仅在非运行状态下允许修改设置
   Future<void> updateSettings({
-    Strictness? strictness,
+    SleepOnset? onset,
+    int? napMinutes,
     bool? whiteNoise,
     bool? useMic,
+    bool? dimScreen,
   }) async {
     if (_phase == NapPhase.detecting || _phase == NapPhase.napping) return;
-    if (strictness != null) _strictness = strictness;
+
+    if (onset != null) _onset = onset;
+    if (napMinutes != null) {
+      _napMinutes = napMinutes.clamp(minNapMinutes, maxNapMinutes);
+    }
     if (whiteNoise != null) _whiteNoise = whiteNoise;
     if (useMic != null) _useMic = useMic;
+    if (dimScreen != null) _dimScreen = dimScreen;
+
+    // 空闲状态下，让主界面显示的剩余时间与新设置保持一致
+    if (_phase == NapPhase.idle) {
+      _remainingSeconds = napSeconds;
+    }
     _safeNotify();
 
     try {
       final SharedPreferences p = await SharedPreferences.getInstance();
-      await p.setInt('strictness', _strictness.index);
+      await p.setInt('sleepOnset', _onset.index);
+      await p.setInt('napMinutes', _napMinutes);
       await p.setBool('whiteNoise', _whiteNoise);
       await p.setBool('useMic', _useMic);
+      await p.setBool('dimScreen', _dimScreen);
     } catch (e) {
       debugPrint('Save settings failed: $e');
     }
@@ -259,7 +279,6 @@ class NapController extends ChangeNotifier {
     _endReason = null;
     _resuming = false;
     _wakeCount = 0;
-    _motionStillSeconds = 0;
     _remainingSeconds = napSeconds;
     _detectProgress = 0.0;
     _audioQuiet = true;
@@ -267,9 +286,8 @@ class NapController extends ChangeNotifier {
     _napEndAt = null;
     _resumeStartedAt = null;
     _lastMagnitude = null;
-    _strongMotionThisSecond = false;
+    _resetMotionTracking();
     _wakeWindow.clear();
-    _lastMotionAt = DateTime.now();
     _phase = NapPhase.detecting;
     _safeNotify();
 
@@ -307,6 +325,15 @@ class NapController extends ChangeNotifier {
     _safeNotify();
   }
 
+  /// 清空体动累计状态
+  void _resetMotionTracking() {
+    _motionStillSeconds = 0;
+    _inMotionEpisode = false;
+    _quietRun = 0;
+    _moderateInSecond = false;
+    _strongInSecond = false;
+  }
+
   // ───────────────────────── 加速度计 ─────────────────────────
 
   void _startAccelerometer() {
@@ -324,8 +351,8 @@ class NapController extends ChangeNotifier {
   }
 
   /// 每次采样：同一路数据，在不同阶段用于不同目的
-  ///  - 检测阶段：判断"是否有体动"，用于重置静止计时
-  ///  - 午休阶段：判断"是否有强烈动作"，用于醒来监测
+  ///  - 检测阶段：区分"轻微体动"和"强烈动作"，供每秒的累计逻辑使用
+  ///  - 午休阶段：只关心"强烈动作"，用于醒来监测
   void _onAccelerometer(AccelerometerEvent e) {
     final double magnitude = math.sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
     final double deviation = (magnitude - _gravity).abs();
@@ -333,15 +360,15 @@ class NapController extends ChangeNotifier {
         _lastMagnitude == null ? 0.0 : (magnitude - _lastMagnitude!).abs();
     _lastMagnitude = magnitude;
 
+    final bool strong = deviation > wakeDeviation || delta > wakeDelta;
+    final bool moderate = deviation > motionDeviationThreshold ||
+        delta > motionDeltaThreshold;
+
     if (_phase == NapPhase.detecting) {
-      if (deviation > _motionDeviationThreshold ||
-          delta > _motionDeltaThreshold) {
-        _lastMotionAt = DateTime.now();
-      }
+      if (strong) _strongInSecond = true;
+      if (moderate) _moderateInSecond = true;
     } else if (_phase == NapPhase.napping) {
-      if (deviation > wakeDeviation || delta > wakeDelta) {
-        _strongMotionThisSecond = true;
-      }
+      if (strong) _strongInSecond = true;
     }
   }
 
@@ -439,19 +466,41 @@ class NapController extends ChangeNotifier {
     }
   }
 
-  /// 检测阶段：融合体动、环境声、呼吸三路信号
+  /// 检测阶段：累计静止时间，并融合体动、环境声、呼吸三路信号
   void _tickDetecting(DateTime now) {
-    final int still = now.difference(_lastMotionAt).inSeconds;
-    _motionStillSeconds = still;
+    // 1) 更新累计静止秒数（带容错）
+    if (_strongInSecond) {
+      // 大幅动作：清零
+      _motionStillSeconds = 0;
+      _inMotionEpisode = true;
+      _quietRun = 0;
+    } else if (_moderateInSecond) {
+      // 轻微体动（如翻身）：每次体动事件只扣一半，持续动作期间不继续累计也不再扣
+      if (!_inMotionEpisode) {
+        _motionStillSeconds = _motionStillSeconds ~/ 2;
+        _inMotionEpisode = true;
+      }
+      _quietRun = 0;
+    } else {
+      _quietRun++;
+      if (_quietRun >= 3) {
+        _inMotionEpisode = false; // 连续 3 秒安静，视为本次体动结束
+      }
+      _motionStillSeconds++;
+    }
+    _strongInSecond = false;
+    _moderateInSecond = false;
 
+    // 2) 融合麦克风信号
     final bool micOn = _micStatus == MicStatus.active;
     _audioQuiet = !micOn || _analyzer.isQuiet(quietWindowSeconds);
     _breathing = micOn && _analyzer.breathingDetected;
 
     final int base = requiredStillSeconds;
     final int required = effectiveRequiredSeconds;
+    final int still = _motionStillSeconds;
 
-    // 条件：体动静止达标，且（环境安静，或已静止足够久而忽略环境声）
+    // 条件：静止累计达标，且（环境安静，或已静止足够久而忽略环境声）
     final bool motionOk = still >= required;
     final bool audioOk =
         _audioQuiet || still >= (base * audioGateOverrideFactor).round();
@@ -461,14 +510,15 @@ class NapController extends ChangeNotifier {
       return;
     }
 
-    // 进度条：体动达标但环境声未达标时停在 99%
+    // 进度条：静止达标但环境声未达标时停在 99%
     _detectProgress = motionOk ? 0.99 : (still / required).clamp(0.0, 0.99);
 
     // 醒来后长时间没有重新入睡 → 提前结束
     final DateTime? resumedAt = _resumeStartedAt;
     if (_resuming &&
         resumedAt != null &&
-        now.difference(resumedAt).inSeconds >= resumeTimeoutSeconds) {
+        now.difference(resumedAt).inSeconds >=
+            requiredStillSeconds + resumeExtraSeconds) {
       unawaited(_finish(NapEndReason.wokeUp));
       return;
     }
@@ -479,8 +529,8 @@ class NapController extends ChangeNotifier {
   /// 午休阶段：更新倒计时，并监测是否醒来
   void _tickNapping(DateTime now) {
     // 1) 醒来监测：记录这一秒是否有强烈动作，维护滑动窗口
-    _wakeWindow.addLast(_strongMotionThisSecond);
-    _strongMotionThisSecond = false;
+    _wakeWindow.addLast(_strongInSecond);
+    _strongInSecond = false;
     while (_wakeWindow.length > wakeWindowSeconds) {
       _wakeWindow.removeFirst();
     }
@@ -496,7 +546,7 @@ class NapController extends ChangeNotifier {
     }
 
     if (strongSeconds >= wakeBucketsNeeded) {
-      _onWakeDetected(now);
+      _onWakeDetected();
       return;
     }
     _safeNotify();
@@ -510,7 +560,7 @@ class NapController extends ChangeNotifier {
     _detectProgress = 1.0;
     _napEndAt = now.add(Duration(seconds: _remainingSeconds));
     _wakeWindow.clear();
-    _strongMotionThisSecond = false;
+    _strongInSecond = false;
     _safeNotify();
 
     // 入睡后关闭麦克风（省电、保护隐私），并开始播放白噪音
@@ -521,13 +571,12 @@ class NapController extends ChangeNotifier {
   }
 
   /// 午休中检测到醒来 → 暂停倒计时，回到检测阶段等待重新入睡
-  void _onWakeDetected(DateTime now) {
+  void _onWakeDetected() {
     _wakeCount++;
     _phase = NapPhase.detecting;
     _resuming = true;
-    _resumeStartedAt = now;
-    _lastMotionAt = now;
-    _motionStillSeconds = 0;
+    _resumeStartedAt = DateTime.now();
+    _resetMotionTracking();
     _detectProgress = 0.0;
     _audioQuiet = true;
     _breathing = false;
