@@ -151,25 +151,10 @@ class _NapHomePageState extends State<NapHomePage>
   String _title() {
     switch (_controller.phase) {
       case NapPhase.idle:
-        return '请将手机平放在枕头旁';
-      case NapPhase.detecting:
-        return _controller.isResuming ? '检测到你醒来了，计时已暂停' : '正在等待入睡检测';
-      case NapPhase.napping:
-        return '正在进行 ${_controller.napMinutes} 分钟深度恢复';
-      case NapPhase.finished:
-        return _controller.endReason == NapEndReason.completed
-            ? '午休结束，精力已充电'
-            : '午休提前结束';
-    }
-  }
-
-  String _subtitle() {
-    switch (_controller.phase) {
-      case NapPhase.idle:
         return 'Place your phone flat beside your pillow';
       case NapPhase.detecting:
         return _controller.isResuming
-            ? 'Awake detected. Timer paused.'
+            ? 'You woke up. Timer paused.'
             : 'Waiting for sleep detection';
       case NapPhase.napping:
         return '${_controller.napMinutes}-minute deep recovery in progress';
@@ -177,6 +162,23 @@ class _NapHomePageState extends State<NapHomePage>
         return _controller.endReason == NapEndReason.completed
             ? 'Nap complete. Recharged.'
             : 'Session ended early';
+    }
+  }
+
+  String _subtitle() {
+    switch (_controller.phase) {
+      case NapPhase.idle:
+        return 'Tap START NAP when you are ready';
+      case NapPhase.detecting:
+        return _controller.isResuming
+            ? 'Waiting for you to fall asleep again'
+            : 'Lie still and relax';
+      case NapPhase.napping:
+        return 'We will wake you when time is up';
+      case NapPhase.finished:
+        return _controller.endReason == NapEndReason.completed
+            ? 'Tap the button to start over'
+            : 'You did not fall back asleep in time';
     }
   }
 
@@ -236,7 +238,7 @@ class _NapHomePageState extends State<NapHomePage>
     );
   }
 
-  /// 顶部状态文案（中文主文案 + 英文副文案）
+  /// 顶部状态文案（主标题 + 副标题）
   Widget _buildStatusText(NapPhase phase) {
     final String title = _title();
     return AnimatedSwitcher(
@@ -500,8 +502,8 @@ class _NapHomePageState extends State<NapHomePage>
       case NapPhase.idle:
         return <Widget>[
           Text(
-            '入睡判定约 ${_controller.requiredStillSeconds ~/ 60} 分钟'
-            ' · 午休 ${_controller.napMinutes} 分钟',
+            'Sleep detection ~${_controller.requiredStillSeconds ~/ 60} min'
+            ' · Nap ${_controller.napMinutes} min',
             style: infoStyle,
           ),
         ];
@@ -514,15 +516,18 @@ class _NapHomePageState extends State<NapHomePage>
       case NapPhase.napping:
         return <Widget>[
           Text(
-            _controller.dimScreenEnabled ? '轻触黑屏可查看倒计时' : '正在监测是否醒来',
+            _controller.dimScreenEnabled
+                ? 'Tap the black screen to see the timer'
+                : 'Monitoring for wake-up',
             style: infoStyle,
           ),
         ];
       case NapPhase.finished:
+        final int wakes = _controller.wakeCount;
         return <Widget>[
           Text(
-            '实际午休 ${NapController.formatSeconds(_controller.sleptSeconds)}'
-            ' · 醒来 ${_controller.wakeCount} 次',
+            'Slept ${NapController.formatSeconds(_controller.sleptSeconds)}'
+            ' · Woke up $wakes ${wakes == 1 ? 'time' : 'times'}',
             style: infoStyle,
           ),
         ];
@@ -532,15 +537,15 @@ class _NapHomePageState extends State<NapHomePage>
   String _detectingInfo() {
     switch (_controller.micStatus) {
       case MicStatus.denied:
-        return '未授予麦克风权限，仅使用体动判断';
+        return 'Microphone permission denied. Using motion only.';
       case MicStatus.error:
-        return '麦克风不可用，仅使用体动判断';
+        return 'Microphone unavailable. Using motion only.';
       case MicStatus.starting:
-        return '正在启动麦克风…';
+        return 'Starting microphone…';
       case MicStatus.active:
       case MicStatus.off:
-        return '需累计静止 ${NapController.formatSeconds(_controller.effectiveRequiredSeconds)}'
-            '${_controller.breathing ? '（已检测到呼吸，缩短判定时间）' : ''}';
+        return 'Needs ${NapController.formatSeconds(_controller.effectiveRequiredSeconds)} of stillness'
+            '${_controller.breathing ? ' (breathing detected, shortened)' : ''}';
     }
   }
 
@@ -645,7 +650,7 @@ class _NapHomePageState extends State<NapHomePage>
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        _sectionTitle('入睡敏感度'),
+                        _sectionTitle('Sleep sensitivity'),
                         const SizedBox(height: 12),
                         _buildOnsetSelector(),
                         const SizedBox(height: 8),
@@ -657,7 +662,7 @@ class _NapHomePageState extends State<NapHomePage>
                           ),
                         ),
                         const SizedBox(height: 24),
-                        _sectionTitle('午休时长'),
+                        _sectionTitle('Nap duration'),
                         const SizedBox(height: 12),
                         _buildNapDurationSelector(
                           customNap,
@@ -665,7 +670,8 @@ class _NapHomePageState extends State<NapHomePage>
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          '从判定入睡后开始计时，不含入睡前的检测时间。',
+                          'The timer starts once you are detected asleep. '
+                          'Detection time is not included.',
                           style: TextStyle(fontSize: 13, color: Colors.white54),
                         ),
                         const SizedBox(height: 16),
@@ -674,10 +680,12 @@ class _NapHomePageState extends State<NapHomePage>
                           value: _controller.dimScreenEnabled,
                           onChanged: (bool v) =>
                               _controller.updateSettings(dimScreen: v),
-                          title: const Text('入睡后黑屏'),
+                          title: const Text('Black screen after sleep'),
                           subtitle: const Text(
-                            '屏幕调到最暗并显示纯黑画面（OLED 屏几乎不发光）。'
-                            '应用仍在运行，继续监测醒来并准时响铃。轻触屏幕可临时查看倒计时。',
+                            'Dims the screen to minimum brightness and shows '
+                            'pure black (OLED pixels emit no light). The app '
+                            'keeps running to detect wake-ups and ring on '
+                            'time. Tap the screen to peek at the timer.',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.white54,
@@ -689,10 +697,12 @@ class _NapHomePageState extends State<NapHomePage>
                           value: _controller.micEnabled,
                           onChanged: (bool v) =>
                               _controller.updateSettings(useMic: v),
-                          title: const Text('麦克风辅助判断'),
+                          title: const Text('Microphone assist'),
                           subtitle: const Text(
-                            '检测呼吸声与环境声，更准确。仅在检测阶段录音，'
-                            '音频在手机内存中实时分析，不保存、不上传。',
+                            'Listens for breathing and ambient noise for '
+                            'better accuracy. Audio is analyzed in memory '
+                            'only while detecting. It is never saved or '
+                            'uploaded.',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.white54,
@@ -704,9 +714,10 @@ class _NapHomePageState extends State<NapHomePage>
                           value: _controller.whiteNoiseEnabled,
                           onChanged: (bool v) =>
                               _controller.updateSettings(whiteNoise: v),
-                          title: const Text('入睡后播放白噪音'),
+                          title: const Text('White noise after sleep'),
                           subtitle: const Text(
-                            '入睡判定成功后才开始播放，避免掩盖呼吸声。',
+                            'Starts only after sleep is detected, so it does '
+                            'not mask your breathing.',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.white54,
@@ -754,15 +765,15 @@ class _NapHomePageState extends State<NapHomePage>
         segments: <ButtonSegment<SleepOnset>>[
           ButtonSegment<SleepOnset>(
             value: SleepOnset.fast,
-            label: label('快', '3 分钟'),
+            label: label('Fast', '3 min'),
           ),
           ButtonSegment<SleepOnset>(
             value: SleepOnset.standard,
-            label: label('标准', '7 分钟'),
+            label: label('Standard', '7 min'),
           ),
           ButtonSegment<SleepOnset>(
             value: SleepOnset.slow,
-            label: label('慢', '12 分钟'),
+            label: label('Slow', '12 min'),
           ),
         ],
         selected: <SleepOnset>{_controller.onset},
@@ -776,11 +787,14 @@ class _NapHomePageState extends State<NapHomePage>
   String _onsetHint(SleepOnset s) {
     switch (s) {
       case SleepOnset.fast:
-        return '约 3 分钟判定入睡，适合躺下就睡着的人。';
+        return 'Detects sleep after about 3 minutes. '
+            'For people who fall asleep right away.';
       case SleepOnset.standard:
-        return '约 7 分钟判定入睡，适合大多数人。';
+        return 'Detects sleep after about 7 minutes. '
+            'Works for most people.';
       case SleepOnset.slow:
-        return '约 12 分钟判定入睡，适合需要慢慢放松的人。';
+        return 'Detects sleep after about 12 minutes. '
+            'For people who need time to unwind.';
     }
   }
 
@@ -802,8 +816,8 @@ class _NapHomePageState extends State<NapHomePage>
               ChoiceChip(
                 label: Text(
                   m == NapController.recommendedNapMinutes
-                      ? '$m 分钟 · Recommended'
-                      : '$m 分钟',
+                      ? '$m min · Recommended'
+                      : '$m min',
                 ),
                 selected: !customNap && minutes == m,
                 selectedColor: _accent.withAlpha(70),
@@ -813,7 +827,7 @@ class _NapHomePageState extends State<NapHomePage>
                 },
               ),
             ChoiceChip(
-              label: const Text('自定义'),
+              label: const Text('Custom'),
               selected: customNap,
               selectedColor: _accent.withAlpha(70),
               onSelected: (bool _) => setCustomNap(true),
@@ -831,16 +845,16 @@ class _NapHomePageState extends State<NapHomePage>
                   max: NapController.maxNapMinutes.toDouble(),
                   divisions:
                       NapController.maxNapMinutes - NapController.minNapMinutes,
-                  label: '$minutes 分钟',
+                  label: '$minutes min',
                   onChanged: (double v) {
                     _controller.updateSettings(napMinutes: v.round());
                   },
                 ),
               ),
               SizedBox(
-                width: 64,
+                width: 72,
                 child: Text(
-                  '$minutes 分钟',
+                  '$minutes min',
                   textAlign: TextAlign.right,
                   style: const TextStyle(fontSize: 14, color: Colors.white70),
                 ),

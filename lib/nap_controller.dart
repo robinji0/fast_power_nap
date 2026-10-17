@@ -343,7 +343,7 @@ class NapController extends ChangeNotifier {
     ).listen(
       _onAccelerometer,
       onError: (Object error) {
-        _errorMessage = '无法读取加速度计 / Accelerometer unavailable';
+        _errorMessage = 'Accelerometer unavailable on this device';
         unawaited(cancel());
       },
       cancelOnError: true,
