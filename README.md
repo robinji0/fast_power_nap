@@ -1,46 +1,42 @@
 # Fast Power Nap
 
-A minimal dark-mode Flutter app for **20-minute power naps**. The countdown starts only after you fall asleep — not when you press the button.
+A dark-mode Flutter app for **sleep-timed power naps**. The countdown starts after the app detects that you have fallen asleep—not when you tap **START NAP**.
 
-## Why
-
-Most nap timers begin the moment you tap Start. If it takes you five minutes to drift off, you lose that time from your actual rest.
-
-Fast Power Nap waits until you are still (and optionally quiet / breathing regularly), then starts a true 20-minute recovery window. If you wake up mid-nap, the timer pauses and resumes only after you fall asleep again.
+If it takes a few minutes to drift off, that time does not reduce your nap. If you wake up during the session, the countdown pauses and resumes after sleep is detected again.
 
 ## How it works
 
 1. Place your phone flat beside your pillow and tap **START NAP**.
-2. The app enters a **detecting** phase and watches for sleep signals.
-3. Once sleep is confirmed, a **20-minute countdown** begins.
-4. During the nap, motion is monitored for waking. A brief roll over is ignored; getting up pauses the timer.
-5. If you stay awake for too long (about 10 minutes), the session ends early.
-6. When the countdown finishes, a gentle alert wakes you.
+2. The app monitors stillness and, when enabled and available, breathing and ambient sound.
+3. Once the sleep-detection conditions are met, your selected nap countdown begins.
+4. During the nap, sustained strong movement is treated as waking: the countdown pauses while the app waits for you to fall asleep again.
+5. If you do not fall back asleep within the selected detection period plus 10 minutes, the session ends early.
+6. At the end of the countdown, a gentle alert plays and the app shows your sleep time and number of detected wake-ups.
 
 ## Sleep detection
 
-Detection fuses up to three on-device signals:
+Detection combines up to three on-device signals:
 
 | Signal | Source | Role |
 |--------|--------|------|
-| **Stillness** | Accelerometer | Required continuous stillness (2–4 min depending on strictness) |
-| **Breathing** | Microphone | Regular breathing shortens the stillness requirement |
-| **Quiet** | Microphone | Recent ambient spikes (talking, coughing) delay the start |
+| **Stillness** | Accelerometer | The required signal. Choose Fast (about 3 minutes), Standard (about 7 minutes), or Slow (about 12 minutes). A brief movement such as rolling over only partially reduces accumulated stillness; stronger movement resets it. |
+| **Breathing** | Microphone | A detected regular breathing rhythm shortens the stillness requirement by about one third. |
+| **Quiet** | Microphone | Recent loud sounds, such as talking or coughing, can delay sleep confirmation. After extended stillness, the sound check is overridden so a noisy room cannot block detection indefinitely. |
 
-If the microphone is off, denied, or unavailable, the app falls back to motion-only detection.
-
-Audio is analyzed in memory in real time. Nothing is saved or uploaded.
+The microphone assist can be disabled in Settings. If permission is denied or the microphone is unavailable, detection automatically uses motion only. Audio is analyzed in memory only while detecting; it is never saved or uploaded. The microphone stops after sleep is detected and starts again if you wake.
 
 ## Features
 
-- **True sleep-timed nap** — countdown starts after sleep detection, not on tap
-- **Wake & resume** — timer pauses if you wake; resumes after you settle again
-- **Adjustable strictness** — Relaxed (2 min), Standard (3 min), or Strict (4 min)
-- **Optional white noise** — plays only after sleep is confirmed, so it does not mask breathing during detection
-- **Optional mic assist** — toggle breathing / ambient analysis in Settings
-- **Screen stays on** — wakelock keeps the display awake during a session
-- **Dark, distraction-free UI** — large circular control, clear phase states, signal chips while detecting
-- **Session summary** — actual sleep time and wake count when finished
+- **Sleep-timed countdown** — choose a preset of 10, 15, 20, 30, or 45 minutes, or set a custom duration from 5 to 90 minutes. The default is 20 minutes.
+- **Wake detection and resume** — sustained strong movement pauses the timer; the remaining time is preserved while sleep is detected again.
+- **Adjustable sleep sensitivity** — Fast (3 min), Standard (7 min), or Slow (12 min) stillness target.
+- **Optional microphone assist** — uses breathing rhythm and recent ambient sound to improve detection.
+- **Optional white noise** — soft synthesized brown noise starts only after sleep is detected, so it does not mask breathing during detection.
+- **Optional black screen after sleep** — lowers the app's screen brightness and displays a pure black overlay while the session keeps running. Tap the screen to briefly reveal the timer for 5 seconds. Brightness is restored when dimming ends; this changes app brightness, not the device's system brightness setting.
+- **Gentle wake-up alert** — a synthesized chime plays when the selected countdown completes.
+- **Screen stays on during a session** — a wakelock helps keep the app and sensors active.
+- **Dark, distraction-free UI** — clear session phases, a large timer, and signal indicators while detecting.
+- **Session summary** — displays nap time and detected wake-ups.
 
 ## Getting started
 
@@ -76,7 +72,7 @@ Flutter version used in CI is pinned to **3.47.7** (stable), matching this proje
 
 ### Permissions
 
-- **Microphone** (optional) — only used during the detecting phase for breathing and ambient sound. Disable anytime in Settings.
+- **Microphone** (optional) — used during sleep detection for breathing and ambient sound analysis. Disable anytime in Settings.
 
 ## Project structure
 
